@@ -18,5 +18,15 @@ services:
       timeout: 3s
       retries: 30
 
+  ingest:
+    build: ./services/ingest
+    environment:
+      RELAY_DATABASE_URL: postgresql://relay:relay@postgres:5432/relay
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   pgdata:

@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/ingest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: relay
+          POSTGRES_PASSWORD: relay
+          POSTGRES_DB: relay
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U relay" --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      RELAY_DATABASE_URL: postgresql://relay:relay@localhost:5432/relay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: psql "$RELAY_DATABASE_URL" -v ON_ERROR_STOP=1 -f ../../db/migrations/001_events_outbox.sql
+      - run: uv sync --frozen
+      - run: uv run ruff check . && uv run ruff format --check .
+      - run: uv run pytest -q
+      - run: docker build -t relay-ingest .
