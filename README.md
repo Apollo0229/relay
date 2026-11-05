@@ -4,6 +4,8 @@ A reliable event pipeline: webhooks in, nothing lost, every message processed on
 
 Relay accepts high-volume webhooks, stores each event and its outgoing message in one database transaction (the transactional outbox), and relays them to Kafka for workers to process with retries and a dead-letter queue.
 
+**[Watch the crash test →](https://apollo0229.github.io/relay/)** The dashboard replays a real run: steady load, failing webhooks, then the relay, worker, API and Kafka each killed with `SIGKILL`. Free hosts can't run Kafka, so the public page plays back a recording; `docker compose up` runs the same dashboard live.
+
 ## Stack
 
 | Part | Tech |
@@ -21,7 +23,7 @@ Relay accepts high-volume webhooks, stores each event and its outgoing message i
 - [x] Go relay publishing the outbox to Kafka
 - [x] Workers with retries, a dead-letter queue and idempotent processing
 - [x] Live dashboard, load test and crash test
-- [ ] Hosted demo
+- [x] Hosted demo (a replay on GitHub Pages)
 
 ## Results
 
@@ -107,6 +109,8 @@ The demo handler counts events per source and type in `event_counts`. Put `"simu
 ## Dashboard
 
 A React page on the live stream: a headline number for each stage (received, outbox backlog, published, processed, dead letters), received against processed events per second, events per source, recent dead letters with their errors, and buttons that send normal, flaky, failing or invalid webhooks through the real API. nginx serves it and proxies `/v1` to the API.
+
+Built with `VITE_REPLAY=1` it plays `public/replay.json` instead, a run recorded by `scripts/record_demo.py`; that is the version on GitHub Pages.
 
 ## Run it
 
