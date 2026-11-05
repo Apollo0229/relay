@@ -56,10 +56,8 @@ type Relay struct {
 
 	// BatchSize caps the messages claimed per round.
 	BatchSize int
-	// PollInterval is the longest the relay waits between rounds when idle.
+	// PollInterval is how long the relay waits between rounds when the outbox is empty.
 	PollInterval time.Duration
-	// Wake, if set, cuts the wait short as soon as new messages are written.
-	Wake <-chan struct{}
 	// MaxBackoff caps the delay after a failed round; it doubles from PollInterval / 10.
 	MaxBackoff time.Duration
 }
@@ -129,31 +127,29 @@ func (r *Relay) Run(ctx context.Context) error {
 			if res.Claimed == r.BatchSize {
 				continue // more may be waiting
 			}
-			if !r.wait(ctx, r.PollInterval, r.Wake) {
+			if !r.wait(ctx, r.PollInterval) {
 				return nil
 			}
 			continue
 		}
 
-		// A failed round waits out the backoff, ignoring wake-ups that would retry too soon.
-		if !r.wait(ctx, backoff, nil) {
+		if !r.wait(ctx, backoff) {
 			return nil
 		}
 		backoff = min(backoff*2, maxBackoff)
 	}
 }
 
-// wait sleeps for d, or until wake fires. It reports false if ctx ended first.
-func (r *Relay) wait(ctx context.Context, d time.Duration, wake <-chan struct{}) bool {
+// wait sleeps for d. It reports false if ctx ended first.
+func (r *Relay) wait(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()
 	select {
 	case <-ctx.Done():
 		return false
 	case <-t.C:
-	case <-wake:
+		return true
 	}
-	return true
 }
 
 // settle splits a batch into messages to mark published and messages to retry.
