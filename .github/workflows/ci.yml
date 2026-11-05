@@ -66,13 +66,43 @@ jobs:
       - run: go test -race -count=1 ./...
       - run: docker build -t relay-relay .
 
+  worker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/worker
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: relay
+          POSTGRES_PASSWORD: relay
+          POSTGRES_DB: relay
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U relay" --health-interval 2s --health-timeout 3s --health-retries 30
+      kafka:
+        image: apache/kafka:4.0.0
+        ports: ["9092:9092"]
+    env:
+      WORKER_DATABASE_URL: postgresql://relay:relay@localhost:5432/relay
+      WORKER_TEST_KAFKA_BROKERS: localhost:9092
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: for f in ../../db/migrations/*.sql; do psql "$WORKER_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"; done
+      - run: uv sync --frozen
+      - run: uv run ruff check . && uv run ruff format --check .
+      - run: uv run pytest -q
+      - run: docker build -t relay-worker .
+
   e2e:
-    # Boots the whole stack and follows one webhook from the API to Kafka.
-    needs: [ingest, relay]
+    # Boots the whole stack and follows webhooks from the API through Kafka to the worker.
+    needs: [ingest, relay, worker]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker compose up -d --build --wait postgres kafka ingest relay
+      - run: docker compose up -d --build --wait postgres kafka ingest relay worker
       - run: scripts/e2e.sh
       - if: failure()
         run: docker compose logs
