@@ -18,7 +18,7 @@ Relay accepts high-volume webhooks, stores each event and its outgoing message i
 ## Status
 
 - [x] Ingest API with a transactional outbox
-- [ ] Go relay publishing the outbox to Kafka
+- [x] Go relay publishing the outbox to Kafka
 - [ ] Workers with retries, a dead-letter queue and idempotent processing
 - [ ] Live dashboard, load test and crash test
 - [ ] Hosted demo
