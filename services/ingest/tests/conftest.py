@@ -13,11 +13,11 @@ from ingest.settings import Settings
 DATABASE_URL = os.environ.get("RELAY_DATABASE_URL", "postgresql://relay:relay@localhost:5432/relay")
 
 
-def pytest_asyncio_loop_factories(config, item):
-    # psycopg's async mode can't use Windows' default Proactor loop; Linux (CI, production) is unaffected.
-    if sys.platform == "win32":
+if sys.platform == "win32":
+    # psycopg's async mode can't use Windows' default Proactor loop. Defined only here because
+    # pytest-asyncio rejects a hook that returns nothing; Linux (CI, production) keeps the default loop.
+    def pytest_asyncio_loop_factories(config, item):
         return {"selector": lambda: asyncio.SelectorEventLoop(selectors.SelectSelector())}
-    return None
 
 
 @pytest.fixture
