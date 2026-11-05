@@ -35,4 +35,4 @@ done
 drained=$(date +%s.%N)
 
 echo "accepted $received events; all $finished published and processed"
-echo "pipeline drained $(echo "$drained - $load_done" | bc -l | xargs printf '%.1f')s after the load stopped"
+awk -v start="$load_done" -v end="$drained" 'BEGIN { printf "pipeline drained %.1fs after the load stopped\n", end - start }'
