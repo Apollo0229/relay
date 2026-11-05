@@ -155,6 +155,8 @@ class Worker:
             )
         elif outcome.status == "dead":
             self.forwarder.send(outcome.next_topic, msg, attempt, outcome.error)
+        elif outcome.status == "duplicate":
+            log.info("skipped duplicate delivery of event %s", event.id)
 
 
 def _header(msg: Message, name: str) -> str | None:
