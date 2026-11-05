@@ -5,7 +5,7 @@
 //	RELAY_DATABASE_URL    Postgres connection string (required)
 //	RELAY_KAFKA_BROKERS   comma-separated seed brokers (required)
 //	RELAY_BATCH_SIZE      messages per round (default 500)
-//	RELAY_POLL_INTERVAL   longest idle wait between rounds (default 1s)
+//	RELAY_POLL_INTERVAL   wait between rounds while the outbox is empty (default 100ms)
 //	RELAY_MAX_BACKOFF     longest wait after a failed round (default 30s)
 package main
 
@@ -65,7 +65,6 @@ func run(log *slog.Logger) error {
 		BatchSize:    cfg.batchSize,
 		PollInterval: cfg.pollInterval,
 		MaxBackoff:   cfg.maxBackoff,
-		Wake:         relay.Listen(ctx, pool, log),
 	}
 	log.Info("relay started", "brokers", cfg.brokers, "batch_size", cfg.batchSize)
 	err = r.Run(ctx)
@@ -85,7 +84,7 @@ func loadConfig() (config, error) {
 	cfg := config{
 		databaseURL:  os.Getenv("RELAY_DATABASE_URL"),
 		batchSize:    500,
-		pollInterval: time.Second,
+		pollInterval: 100 * time.Millisecond,
 		maxBackoff:   30 * time.Second,
 	}
 	if cfg.databaseURL == "" {

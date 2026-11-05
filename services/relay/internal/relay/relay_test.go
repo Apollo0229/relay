@@ -196,18 +196,17 @@ func TestRunOnceRecordsWhatKafkaAcceptedDuringShutdown(t *testing.T) {
 	}
 }
 
-func TestRunWakesUpForNewMessages(t *testing.T) {
+func TestRunPicksUpNewMessagesOnTheNextPoll(t *testing.T) {
 	store := newMemStore()
 	pub := &scriptedPublisher{}
-	wake := make(chan struct{}, 1)
-	r := &Relay{Store: store, Publisher: pub, BatchSize: 10, PollInterval: time.Hour, Wake: wake}
+	r := &Relay{Store: store, Publisher: pub, BatchSize: 10, PollInterval: 20 * time.Millisecond}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error)
 	go func() { done <- r.Run(ctx) }()
 
+	time.Sleep(50 * time.Millisecond) // let it go idle first
 	store.add(msg(1, "a"))
-	wake <- struct{}{}
 	waitFor(t, func() bool { return len(store.published()) == 1 })
 
 	cancel()

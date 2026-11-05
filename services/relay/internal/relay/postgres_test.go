@@ -3,12 +3,9 @@ package relay
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
 	"os"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -152,22 +149,6 @@ func TestPostgresAbandonedClaimIsRetried(t *testing.T) {
 	defer again.Settle(ctx, nil, nil)
 	if len(again.Messages()) != 1 {
 		t.Fatal("an abandoned claim must leave its messages pending")
-	}
-}
-
-func TestPostgresListenWakesOnCommit(t *testing.T) {
-	pool := testPool(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	wake := Listen(ctx, pool, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	<-wake // the catch-up signal sent once listening
-
-	seed(t, pool, "a")
-	select {
-	case <-wake:
-	case <-time.After(2 * time.Second):
-		t.Fatal("no wake-up after an outbox insert")
 	}
 }
 

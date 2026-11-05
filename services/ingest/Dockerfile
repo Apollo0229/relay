@@ -10,6 +10,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src ./src
 RUN uv sync --frozen --no-dev
 
-ENV PATH="/app/.venv/bin:$PATH"
+# uvicorn starts this many processes; each has its own connection pool.
+ENV PATH="/app/.venv/bin:$PATH" WEB_CONCURRENCY=4
 EXPOSE 8000
 CMD ["uvicorn", "ingest.main:app", "--host", "0.0.0.0", "--port", "8000"]
