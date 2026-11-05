@@ -94,3 +94,51 @@ async def test_stats_and_health(client):
     await client.post("/v1/events/stripe", json=PAYMENT)
     assert (await client.get("/v1/stats")).json() == {"events": 1, "pending": 1, "published": 0}
     assert (await client.get("/healthz")).json() == {"status": "ok"}
+
+
+async def test_dashboard_follows_events_through_the_pipeline(client, db):
+    ids = [
+        (await client.post(f"/v1/events/{s}", json=PAYMENT)).json()["id"]
+        for s in ("stripe", "stripe", "github")
+    ]
+    db.execute("update outbox set published_at = now() where event_id = any(%s::uuid[])", (ids[:2],))
+    db.execute(
+        """
+        insert into processed_events (consumer, event_id, status, attempts, error) values
+          ('event-counter', %s, 'done', 1, null),
+          ('event-counter', %s, 'dead', 3, 'RuntimeError: downstream outage')
+        """,
+        (ids[0], ids[1]),
+    )
+    db.execute("insert into event_counts values ('stripe', 'payment.succeeded', 1)")
+
+    body = (await client.get("/v1/dashboard")).json()
+
+    assert {k: body[k] for k in ("events", "pending", "published", "processed", "retried", "dead")} == {
+        "events": 3,
+        "pending": 1,
+        "published": 2,
+        "processed": 1,
+        "retried": 0,
+        "dead": 1,
+    }
+    assert body["sources"] == [{"source": "stripe", "count": 1}]
+    [dead] = body["dead_letters"]
+    assert (dead["id"], dead["source"], dead["attempts"]) == (ids[1], "stripe", 3)
+    assert dead["error"] == "RuntimeError: downstream outage"
+
+
+async def test_dashboard_stream_yields_fresh_snapshots(client):
+    app = client._transport.app
+    stream = next(r for r in app.routes if getattr(r, "path", "") == "/v1/dashboard/stream").endpoint
+
+    class FakeRequest:
+        pass
+
+    request = FakeRequest()
+    request.app = app
+    snapshots = stream(request)
+    assert (await anext(snapshots)).events == 0
+    await client.post("/v1/events/stripe", json=PAYMENT)
+    assert (await anext(snapshots)).events == 1
+    await snapshots.aclose()

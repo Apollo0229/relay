@@ -9,3 +9,5 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://relay:relay@localhost:5432/relay"
     pool_size: int = 10
     topic: str = "relay.events"
+    # Seconds between dashboard snapshots on the live stream.
+    stream_interval: float = 1.0
