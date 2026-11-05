@@ -1,9 +1,12 @@
+import asyncio
+from collections.abc import AsyncIterable
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Header, Path, Request, Response
+from fastapi.sse import EventSourceResponse
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, Field
@@ -29,6 +32,33 @@ class Stats(BaseModel):
     events: int
     pending: int
     published: int
+
+
+class SourceCount(BaseModel):
+    source: str
+    count: int
+
+
+class DeadLetter(BaseModel):
+    id: UUID
+    source: str
+    type: str
+    attempts: int
+    error: str | None
+    at: datetime
+
+
+class Dashboard(BaseModel):
+    """The whole pipeline at a glance: API → outbox → Kafka → worker."""
+
+    events: int
+    pending: int
+    published: int
+    processed: int
+    retried: int  # processed, but only after at least one retry
+    dead: int
+    sources: list[SourceCount]
+    dead_letters: list[DeadLetter]
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -109,6 +139,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             events, pending, published = await cur.fetchone()
         return Stats(events=events, pending=pending, published=published)
 
+    @app.get("/v1/dashboard")
+    async def dashboard(request: Request) -> Dashboard:
+        return await _dashboard(request.app.state.pool)
+
+    @app.get("/v1/dashboard/stream", response_class=EventSourceResponse)
+    async def dashboard_stream(request: Request) -> AsyncIterable[Dashboard]:
+        """The dashboard snapshot, once a second, as server-sent events."""
+        while True:
+            yield await _dashboard(request.app.state.pool)
+            await asyncio.sleep(settings.stream_interval)
+
     @app.get("/healthz")
     async def healthz(request: Request) -> dict[str, str]:
         async with request.app.state.pool.connection() as conn:
@@ -116,3 +157,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     return app
+
+
+async def _dashboard(pool: AsyncConnectionPool) -> Dashboard:
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            """
+            select (select count(*) from events),
+                   (select count(*) from outbox where published_at is null),
+                   (select count(*) from outbox where published_at is not null),
+                   count(*) filter (where status = 'done'),
+                   count(*) filter (where status = 'done' and attempts > 1),
+                   count(*) filter (where status = 'dead')
+            from processed_events
+            """
+        )
+        events, pending, published, processed, retried, dead = await cur.fetchone()
+        cur = await conn.execute(
+            "select source, sum(count)::bigint from event_counts group by source order by 2 desc, 1 limit 8"
+        )
+        sources = [SourceCount(source=s, count=n) for s, n in await cur.fetchall()]
+        cur = await conn.execute(
+            """
+            select e.id, e.source, e.type, p.attempts, p.error, p.processed_at
+            from processed_events p join events e on e.id = p.event_id
+            where p.status = 'dead'
+            order by p.processed_at desc
+            limit 10
+            """
+        )
+        dead_letters = [
+            DeadLetter(id=i, source=s, type=t, attempts=a, error=err, at=at)
+            for i, s, t, a, err, at in await cur.fetchall()
+        ]
+    return Dashboard(
+        events=events,
+        pending=pending,
+        published=published,
+        processed=processed,
+        retried=retried,
+        dead=dead,
+        sources=sources,
+        dead_letters=dead_letters,
+    )

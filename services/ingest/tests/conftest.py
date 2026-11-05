@@ -24,7 +24,7 @@ if sys.platform == "win32":
 def db():
     """A direct connection for assertions; tables are emptied before each test."""
     with psycopg.connect(DATABASE_URL, autocommit=True) as conn:
-        conn.execute("truncate outbox, events restart identity")
+        conn.execute("truncate outbox, events, processed_events, event_counts restart identity")
         yield conn
 
 
