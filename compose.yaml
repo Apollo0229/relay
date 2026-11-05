@@ -87,5 +87,12 @@ services:
       kafka-init:
         condition: service_completed_successfully
 
+  dashboard:
+    build: ./services/dashboard
+    ports:
+      - "8080:80"
+    depends_on:
+      - ingest
+
 volumes:
   pgdata:
