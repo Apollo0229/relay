@@ -32,6 +32,7 @@ docker run -d --name "$run" --network "$network" -v "$PWD/scripts/load:/scripts:
   -e RATE="$rate" -e DURATION=75s -e PREFIX="$run" -e RETRIES=60 \
   grafana/k6:2.3.0 run --quiet /scripts/webhooks.js > /dev/null
 start=$(date +%s.%N)
+since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 sleep 8;  crash relay 8
 sleep 6;  crash worker 8
@@ -60,7 +61,8 @@ at "drained"
 counted=$(sql "select coalesce(sum(count), 0) from event_counts where source like '$run-%'")
 dead=$(sql "select count(*) from processed_events p join events e on e.id = p.event_id
             where e.source like '$run-%' and p.status = 'dead'")
-duplicates=$(( $(topic_size) - written_before - stored ))
+republished=$(( $(topic_size) - written_before - stored ))
+skipped=$(docker compose logs worker --since "$since" 2>/dev/null | grep -c "skipped duplicate" || true)
 
 echo
 echo "requests that failed during the crashes:  ${failed_requests:-0} (retried by the sender)"
@@ -69,7 +71,8 @@ echo "webhooks never acknowledged:              ${undelivered:-0}"
 echo "events stored:                            $stored"
 echo "events processed:                         $processed (dead-lettered: $dead)"
 echo "effects applied (event_counts total):     $counted"
-echo "duplicate messages Kafka delivered:       $duplicates (skipped by the worker)"
+echo "messages the relay published twice:       $republished"
+echo "redeliveries the worker skipped:          $skipped"
 
 ok=true
 [ "${undelivered:-0}" -eq 0 ] || { echo "FAIL: some webhooks were never acknowledged" >&2; ok=false; }
