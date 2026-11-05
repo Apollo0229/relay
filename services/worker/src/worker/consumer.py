@@ -4,7 +4,9 @@ A message forwarded to a delay topic carries a not-before time. Every message in
 a delay topic waits the same time, so they come due in the order they arrive,
 and a tier's thread only ever waits for the message at its head. Offsets are
 committed after a message is handled or forwarded, so a crash means a
-redelivery, which the processed_events check absorbs.
+redelivery, which the processed_events check absorbs. That same check is why
+offsets can be committed in the background once a second instead of per message:
+a commit lost in a crash costs skipped duplicates, not a second effect.
 """
 
 import logging
@@ -94,7 +96,11 @@ class Worker:
             {
                 "bootstrap.servers": self.settings.kafka_brokers,
                 "group.id": self.settings.group_id,
-                "enable.auto.commit": False,
+                # Offsets are stored only once a message is handled, then committed in the
+                # background; per-message commits crowd out heartbeats under load.
+                "enable.auto.commit": True,
+                "enable.auto.offset.store": False,
+                "auto.commit.interval.ms": 1000,
                 "auto.offset.reset": "earliest",
                 # A delay tier holds its head message for up to `delay` between polls.
                 "max.poll.interval.ms": int(max(300, tier.delay + 60) * 1000),
@@ -123,7 +129,7 @@ class Worker:
                     self.stopping.wait(backoff)
                     backoff = min(backoff * 2, 30)
                     continue
-                consumer.commit(message=msg, asynchronous=False)
+                consumer.store_offsets(message=msg)
                 backoff = 0.5
         finally:
             consumer.close()
