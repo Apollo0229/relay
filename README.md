@@ -11,7 +11,7 @@ Relay accepts high-volume webhooks, stores each event and its outgoing message i
 | Ingest API | Python · FastAPI |
 | Event store and outbox | PostgreSQL |
 | Outbox relay | Go |
-| Broker | Kafka (Redpanda locally) |
+| Broker | Kafka (KRaft) |
 | Workers | Python |
 | Dashboard | React · TypeScript |
 
@@ -39,12 +39,31 @@ Content-Type: application/json
 
 `GET /v1/stats` reports stored, pending and published counts; `GET /healthz` checks the database.
 
+## Outbox relay
+
+A Go service that moves the outbox to Kafka.
+
+- **Wakes on commit:** a trigger sends `NOTIFY outbox` when rows are written, so messages go out immediately; a 1s poll covers a dropped listener.
+- **Safe to scale out:** batches are claimed with `FOR UPDATE SKIP LOCKED`, so relays sharing one outbox never publish the same row at once. One relay keeps strict per-source order; more add throughput and failover.
+- **At least once:** a row is marked published in the same transaction that claimed it, only after Kafka acknowledges it (all in-sync replicas, idempotent producer). A crash in between republishes the batch, and consumers drop the copy by event id.
+- **Ordered retries:** when a message fails, later messages for the same key in that batch are held back too, so a retry replays the key's messages in order. Failed rounds back off exponentially, and each row records `attempts` and `last_error`.
+
+| Setting | Default |
+| --- | --- |
+| `RELAY_DATABASE_URL` | required |
+| `RELAY_KAFKA_BROKERS` | required, comma-separated |
+| `RELAY_BATCH_SIZE` | `500` |
+| `RELAY_POLL_INTERVAL` | `1s` |
+| `RELAY_MAX_BACKOFF` | `30s` |
+
 ## Run it
 
 ```bash
-docker compose up --build     # Postgres + ingest on http://localhost:8000 (API docs at /docs)
+docker compose up --build     # Postgres, Kafka, relay, and ingest on http://localhost:8000 (API docs at /docs)
 
 curl -X POST localhost:8000/v1/events/stripe   -H 'Content-Type: application/json' -H 'Idempotency-Key: evt_1'   -d '{"type":"payment.succeeded","data":{"amount":1200}}'
+
+scripts/e2e.sh                # one webhook, sent twice, must reach Kafka once
 ```
 
 ## Develop
@@ -53,6 +72,9 @@ curl -X POST localhost:8000/v1/events/stripe   -H 'Content-Type: application/jso
 cd services/ingest
 uv sync
 uv run pytest        # needs Postgres: docker compose up postgres
+
+cd services/relay
+RELAY_TEST_DATABASE_URL=postgres://relay:relay@localhost:5432/relay RELAY_TEST_KAFKA_BROKERS=localhost:9092 go test ./...   # integration tests skip when unset
 ```
 
 ## License
