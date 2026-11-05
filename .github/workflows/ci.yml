@@ -26,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: psql "$RELAY_DATABASE_URL" -v ON_ERROR_STOP=1 -f ../../db/migrations/001_events_outbox.sql
+      - run: for f in ../../db/migrations/*.sql; do psql "$RELAY_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"; done
       - run: uv sync --frozen
       - run: uv run ruff check . && uv run ruff format --check .
       - run: uv run pytest -q
