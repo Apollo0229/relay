@@ -1,15 +1,19 @@
-import { useEffect, useState } from "react";
 import { DeadLetters } from "./components/DeadLetters.tsx";
 import { ConnectionBadge, Pipeline } from "./components/Pipeline.tsx";
+import { ReplayBanner, Timeline } from "./components/Replay.tsx";
 import { SendEvents } from "./components/SendEvents.tsx";
 import { Sources } from "./components/Sources.tsx";
 import { Throughput } from "./components/Throughput.tsx";
 import { toRates } from "./lib/rates.ts";
-import { useDashboard } from "./useDashboard.ts";
+import { REPLAY, useLiveDashboard, useReplayDashboard } from "./useDashboard.ts";
+
+const useDashboard = REPLAY ? useReplayDashboard : useLiveDashboard;
 
 export function App() {
-  const { history, latest, connection } = useDashboard();
-  const now = useNow();
+  const { history, latest, connection, now, replay } = useDashboard();
+  const kills = (replay?.recording.markers ?? [])
+    .filter((m) => m.kind === "crash")
+    .map((m) => ({ at: m.t * 1000, label: m.label, crash: true }));
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
@@ -22,7 +26,7 @@ export function App() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <ConnectionBadge state={connection} />
+          {!replay && <ConnectionBadge state={connection} />}
           <a
             href="https://github.com/Apollo0229/relay"
             className="text-sm text-ink-2 underline-offset-4 hover:underline"
@@ -35,24 +39,15 @@ export function App() {
       </header>
 
       <main className="mt-6 space-y-4">
+        {replay && <ReplayBanner replay={replay} />}
         <Pipeline data={latest} />
-        <Throughput points={toRates(history, 3)} now={now} />
+        <Throughput points={toRates(history, 3)} now={now} markers={kills} />
         <div className="grid gap-4 lg:grid-cols-2">
-          <SendEvents />
+          {replay ? <Timeline replay={replay} /> : <SendEvents />}
           <Sources sources={latest?.sources ?? []} />
         </div>
         <DeadLetters items={latest?.dead_letters ?? []} />
       </main>
     </div>
   );
-}
-
-/** A clock that ticks four times a second, so the chart scrolls smoothly between snapshots. */
-function useNow() {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 250);
-    return () => clearInterval(timer);
-  }, []);
-  return now;
 }

@@ -8,10 +8,17 @@ const SERIES = [
   { key: "processed", label: "Processed", color: "var(--series-2)" },
 ] as const;
 
+const CRITICAL = "#d03b3b"; // status color; @theme inline doesn't expose it as a CSS variable
 const rate = (n: number) => (n >= 10 ? Math.round(n).toString() : n.toFixed(1));
 
+export interface ChartMarker {
+  at: number;
+  label: string;
+  crash: boolean;
+}
+
 /** Events per second over the last minute: what the API accepts against what the worker finishes. */
-export function Throughput({ points, now }: { points: RatePoint[]; now: number }) {
+export function Throughput({ points, now, markers = [] }: { points: RatePoint[]; now: number; markers?: ChartMarker[] }) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<RatePoint | null>(null);
   const [asTable, setAsTable] = useState(false);
@@ -23,6 +30,9 @@ export function Throughput({ points, now }: { points: RatePoint[]; now: number }
   const y = (v: number) => PAD.top + plotH - (v / yMax) * plotH;
   const ticks = tickValues(yMax);
   const visible = points.filter((p) => p.at >= now - WINDOW_MS);
+  // Marker labels need room; on narrow screens the lines stay and the timeline names them.
+  const shownMarkers = markers.filter((m) => m.at >= now - WINDOW_MS && m.at <= now);
+  const labelMarkers = plotW >= 480;
   const last = visible.at(-1);
 
   // End labels sit beside the newest point; nudge them apart when the lines meet.
@@ -98,6 +108,24 @@ export function Throughput({ points, now }: { points: RatePoint[]; now: number }
                 >
                   {s === 0 ? "now" : `${s}s ago`}
                 </text>
+              ))}
+
+              {shownMarkers.map((m) => (
+                <g key={`${m.at}-${m.label}`}>
+                  <line
+                    x1={x(m.at)}
+                    x2={x(m.at)}
+                    y1={PAD.top}
+                    y2={PAD.top + plotH}
+                    stroke={m.crash ? CRITICAL : "var(--axis)"}
+                    strokeDasharray="3 3"
+                  />
+                  {labelMarkers && (
+                    <text x={x(m.at) + 4} y={PAD.top + 10} className="fill-ink-2 text-[11px]">
+                      {m.label}
+                    </text>
+                  )}
+                </g>
               ))}
 
               {SERIES.map((s) => (
