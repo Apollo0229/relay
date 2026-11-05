@@ -53,9 +53,12 @@ services:
 
   kafka-init:
     image: apache/kafka:4.0.0
-    command: >-
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092
-      --create --if-not-exists --topic relay.events --partitions 6
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for topic in relay.events relay.events.retry.1 relay.events.retry.2 relay.events.dlq; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092             --create --if-not-exists --topic "$$topic" --partitions 6 || exit 1
+        done
     depends_on:
       kafka:
         condition: service_healthy
@@ -65,6 +68,18 @@ services:
     environment:
       RELAY_DATABASE_URL: postgres://relay:relay@postgres:5432/relay
       RELAY_KAFKA_BROKERS: kafka:29092
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  worker:
+    build: ./services/worker
+    environment:
+      WORKER_DATABASE_URL: postgresql://relay:relay@postgres:5432/relay
+      WORKER_KAFKA_BROKERS: kafka:29092
     restart: unless-stopped
     depends_on:
       postgres:
