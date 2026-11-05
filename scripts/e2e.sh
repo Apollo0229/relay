@@ -1,41 +1,49 @@
 #!/usr/bin/env bash
-# Sends one webhook through a running stack (docker compose up) and checks that
-# it reaches Kafka exactly once, even when the sender retries it.
+# Follows webhooks through a running stack (docker compose up): a retried
+# webhook must reach Kafka once and be processed once, and an invalid one must
+# end up in the dead-letter topic.
 set -euo pipefail
 
 api=${API:-http://localhost:8000}
-key="e2e-$(date +%s%N)"
+run=$(date +%s%N)
+# MSYS_NO_PATHCONV stops Git Bash on Windows from rewriting container paths.
+export MSYS_NO_PATHCONV=1
 
-send() {
-  curl -fsS -X POST "$api/v1/events/e2e" \
-    -H 'Content-Type: application/json' -H "Idempotency-Key: $key" \
-    -d '{"type":"order.created","data":{"order":42}}'
+send() { # send <idempotency key> <json body>
+  curl -fsS -X POST "$api/v1/events/e2e" -H 'Content-Type: application/json' -H "Idempotency-Key: $1" -d "$2"
 }
-first=$(send)
-retry=$(send) # same key: must return the original event, not store a new one
+id_of() { sed -E 's/.*"id":"([^"]+)".*/\1/'; }
+sql() { docker compose exec -T postgres psql -U relay -d relay -tAc "$1"; }
+topic() {
+  docker compose exec -T kafka /opt/kafka/bin/kafka-console-consumer.sh \
+    --bootstrap-server localhost:9092 --topic "$1" --from-beginning --timeout-ms 10000 2>/dev/null || true
+}
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+order='{"type":"order.created","data":{"order":42}}'
+first=$(send "order-$run" "$order")
+retry=$(send "order-$run" "$order") # same key: must return the original event
 echo "$first"
 echo "$retry"
-id=$(echo "$first" | sed -E 's/.*"id":"([^"]+)".*/\1/')
+id=$(echo "$first" | id_of)
+[ "$(echo "$retry" | id_of)" = "$id" ] || fail "the retried webhook was stored as a new event"
 
-echo "waiting for the relay to publish..."
+bad=$(send "bad-$run" '{"type":"order.created","data":{"simulate":"invalid"}}' | id_of)
+
+echo "waiting for the worker..."
 for _ in $(seq 60); do
-  stats=$(curl -fsS "$api/v1/stats")
-  if echo "$stats" | grep -q '"pending":0'; then
-    break
-  fi
+  done_status=$(sql "select status from processed_events where event_id = '$id'")
+  bad_status=$(sql "select status from processed_events where event_id = '$bad'")
+  [ "$done_status" = done ] && [ "$bad_status" = dead ] && break
   sleep 1
 done
-echo "$stats"
+curl -fsS "$api/v1/stats"; echo
+[ "$done_status" = done ] || fail "event $id was not processed (status: '${done_status}')"
+[ "$bad_status" = dead ] || fail "invalid event $bad was not dead-lettered (status: '${bad_status}')"
 
-echo "reading the topic..."
-# MSYS_NO_PATHCONV stops Git Bash on Windows from rewriting the container path.
-messages=$(MSYS_NO_PATHCONV=1 docker compose exec -T kafka /opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server localhost:9092 --topic relay.events --from-beginning --timeout-ms 10000 2>/dev/null || true)
+published=$(topic relay.events | grep -c "\"id\": \"$id\"" || true)
+[ "$published" -eq 1 ] || fail "expected event $id on relay.events once, found $published"
+dead=$(topic relay.events.dlq | grep -c "\"id\": \"$bad\"" || true)
+[ "$dead" -eq 1 ] || fail "expected event $bad on relay.events.dlq once, found $dead"
 
-# Match on the event id, so the check also holds on a stack that already has traffic.
-count=$(echo "$messages" | grep -c "\"id\": \"$id\"" || true)
-if [ "$count" -ne 1 ]; then
-  echo "expected event $id on the topic exactly once, found $count" >&2
-  exit 1
-fi
-echo "ok: event $id was sent twice and published once"
+echo "ok: $id sent twice, published once, processed once; $bad dead-lettered"
