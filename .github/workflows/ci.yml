@@ -96,13 +96,31 @@ jobs:
       - run: uv run pytest -q
       - run: docker build -t relay-worker .
 
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: services/dashboard/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: docker build -t relay-dashboard .
+
   e2e:
     # Boots the whole stack and follows webhooks from the API through Kafka to the worker.
-    needs: [ingest, relay, worker]
+    needs: [ingest, relay, worker, dashboard]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker compose up -d --build --wait postgres kafka ingest relay worker
+      - run: docker compose up -d --build --wait postgres kafka ingest relay worker dashboard
       - run: scripts/e2e.sh
+      - run: curl -fsS localhost:8080/ | grep -q '<div id="root">' && curl -fsS localhost:8080/v1/dashboard | grep -q '"events"'
       - if: failure()
         run: docker compose logs
