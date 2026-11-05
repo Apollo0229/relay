@@ -56,14 +56,34 @@ A Go service that moves the outbox to Kafka.
 | `RELAY_POLL_INTERVAL` | `1s` |
 | `RELAY_MAX_BACKOFF` | `30s` |
 
+## Workers
+
+Python consumers that apply each event once, however often Kafka delivers it.
+
+- **Exactly-once effects:** a worker records `(consumer, event_id)` in `processed_events` in the same transaction as the event's writes. A redelivered message finds the row and is skipped; two workers given the same event at once serialise on its primary key.
+- **Retries without blocking:** a failed event moves to `relay.events.retry.1` (5s), then `relay.events.retry.2` (30s), each served by its own consumer, so a slow retry never holds up fresh events. Headers carry the attempt number, the last error and when it may run.
+- **Dead-letter topic:** after the last retry, or at once for a permanent error such as a malformed payload, the event goes to `relay.events.dlq` and is recorded with status `dead`.
+- **Outages are not the event's fault:** if Postgres or Kafka is down, the worker puts the message back and backs off rather than spending a retry. Offsets are committed only after a message is handled or forwarded.
+
+Retried events can overtake newer ones from the same source, the usual trade for non-blocking retries; per-source order holds while nothing fails.
+
+The demo handler counts events per source and type in `event_counts`. Put `"simulate": "flaky"`, `"error"` or `"invalid"` in an event's `data` to watch a retry, a dead letter after three attempts, or an immediate dead letter.
+
+| Setting | Default |
+| --- | --- |
+| `WORKER_DATABASE_URL` | `postgresql://relay:relay@localhost:5432/relay` |
+| `WORKER_KAFKA_BROKERS` | `localhost:9092` |
+| `WORKER_RETRY_DELAYS` | `[5, 30]` (seconds, one per retry) |
+| `WORKER_GROUP_ID` | `relay-workers` |
+
 ## Run it
 
 ```bash
-docker compose up --build     # Postgres, Kafka, relay, and ingest on http://localhost:8000 (API docs at /docs)
+docker compose up --build     # Postgres, Kafka, relay, worker, and ingest on http://localhost:8000 (API docs at /docs)
 
 curl -X POST localhost:8000/v1/events/stripe   -H 'Content-Type: application/json' -H 'Idempotency-Key: evt_1'   -d '{"type":"payment.succeeded","data":{"amount":1200}}'
 
-scripts/e2e.sh                # one webhook, sent twice, must reach Kafka once
+scripts/e2e.sh                # a retried webhook is published and processed once; an invalid one is dead-lettered
 ```
 
 ## Develop
@@ -75,6 +95,9 @@ uv run pytest        # needs Postgres: docker compose up postgres
 
 cd services/relay
 RELAY_TEST_DATABASE_URL=postgres://relay:relay@localhost:5432/relay RELAY_TEST_KAFKA_BROKERS=localhost:9092 go test ./...   # integration tests skip when unset
+
+cd services/worker
+WORKER_TEST_KAFKA_BROKERS=localhost:9092 uv run pytest  # needs Postgres; the Kafka test skips when unset
 ```
 
 ## License
